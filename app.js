@@ -1,10 +1,10 @@
 'use strict';
-// 筋トレメモ: 記録はこの端末（localStorage）に保存。スプレッドシートへは Apps Script 経由で書き込む
+// 筋トレメモ: 記録はこの端末（localStorage）に保存。スプレッドシートへは Google ログイン（google.js）か Apps Script 経由で書き込む
 
 const KEY = 'kintore.v1';
 const PRESETS = ['ベンチプレス', 'スクワット', 'デッドリフト', 'インクラインベンチプレス', 'ダンベルプレス', 'ショルダープレス',
   'ラットプルダウン', '懸垂', 'ベントオーバーロウ', 'レッグプレス', 'アームカール', 'トライセプスエクステンション', 'ディップス'];
-const DEFAULT_SETTINGS = { url: '', key: '', sheet: '日次記録', dateCol: 'A', col: 'F', sep: '／', autoSync: false, timer: 60 };
+const DEFAULT_SETTINGS = { sheetId: '', gs: null, url: '', key: '', sheet: '日次記録', dateCol: 'A', col: 'F', sep: '／', autoSync: false, timer: 60 };
 
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -102,9 +102,23 @@ async function callGas(body) {
   if (!j.ok) throw new Error(j.error || '書き込みに失敗しました');
   return j;
 }
-async function sendDay(date, text) {
+// 'google'（Google ログインで直接）/ 'gas'（Apps Script）/ ''（未設定）
+function linkMode() {
+  const s = db.settings;
+  if (s.sheetId && GSheets.available()) return 'google';
+  return s.url ? 'gas' : '';
+}
+// interactive … ログインが切れていたら窓を開いてよいか（ボタンを押したときだけ true）
+async function sendDay(date, text, interactive = true) {
+  const s = db.settings;
+  const mode = linkMode();
+  if (!mode) throw new Error('設定画面でスプレッドシートとつないでください');
+  // ログインの窓はクリックの流れの中でしか開けないので、await の前に呼ぶ
+  const tokenP = mode === 'google' ? GSheets.ensureToken(interactive) : null;
   const day = getDay(date, true);
-  const j = await callGas({ action: 'write', date: slash(date), text });
+  const j = mode === 'google'
+    ? await GSheets.writeDay(await tokenP, { id: s.sheetId, sheet: s.sheet, dateCol: s.dateCol, col: s.col, date: slash(date), text })
+    : await callGas({ action: 'write', date: slash(date), text });
   day.synced = { text: sheetText(day), sent: text, at: Date.now() };
   save();
   return j;
@@ -115,12 +129,12 @@ function resultMsg(date, j) {
 }
 let autoTimer = 0;
 function scheduleAutoSync(date) {
-  if (!db.settings.autoSync || !db.settings.url) return;
+  if (!db.settings.autoSync || !linkMode()) return;
   clearTimeout(autoTimer);
   autoTimer = setTimeout(async () => {
     const st = syncState(date);
     if (st.state !== 'new' && st.state !== 'changed') return;
-    try { await sendDay(date, st.text); toast('スプレッドシートに自動で書き込みました'); } catch (e) { toast('自動書き込み失敗: ' + e.message); }
+    try { await sendDay(date, st.text, false); toast('スプレッドシートに自動で書き込みました'); } catch (e) { toast('自動書き込み失敗: ' + e.message); }
   }, 4000);
 }
 
@@ -210,8 +224,8 @@ function unsyncedDates() {
   return Object.keys(db.days).filter((d) => ['new', 'changed'].includes(syncState(d).state)).sort();
 }
 function unsyncedBox() {
-  if (!db.settings.url) {
-    return `<div class="sheet"><h4>スプレッドシート連携</h4><p class="note">設定画面で Apps Script の URL を入れると、記録をスプレッドシートに書き込めます。</p>
+  if (!linkMode()) {
+    return `<div class="sheet"><h4>スプレッドシート連携</h4><p class="note">設定画面でスプレッドシートとつなぐと、記録をボタン1つで書き込めます。</p>
       <button class="btn small outline" onclick="location.hash='#/settings'">設定を開く</button></div>`;
   }
   const u = unsyncedDates();
@@ -543,25 +557,48 @@ function chart(pts) {
 function viewSettings(main) {
   header('設定');
   const s = db.settings;
+  const mode = linkMode();
+  const gs = s.gs || { title: '', sheets: [], headers: {} };
+  let link;
+  if (!GSheets.available()) {
+    link = `<p class="note">Google ログインの準備（README の「Google ログインの準備」）がまだなので、下の「詳細設定」の Apps Script でつないでください。</p>`;
+  } else if (mode === 'google') {
+    link = `
+    <div class="sheet" style="margin-top:0">
+      <h4>✓ つながっています</h4>
+      <p class="st">📗 ${esc(gs.title || 'スプレッドシート')}</p>
+      <div class="form"><label>書き込むシート</label>
+        <select id="g_sheet">${(gs.sheets.length ? gs.sheets : [s.sheet]).map((n) => `<option ${n === s.sheet ? 'selected' : ''}>${esc(n)}</option>`).join('')}</select></div>
+      <p class="note">${esc(s.dateCol)}列（${esc(headerName(s.dateCol) || '日付')}）で日付を探して、${esc(s.col)}列（${esc(headerName(s.col) || '見出しなし')}）に書き込みます。</p>
+      <div class="btns"><button class="btn small outline" id="g_test">接続テスト</button><button class="btn small gray" id="g_off">つなぐのをやめる</button></div>
+    </div>`;
+  } else {
+    link = `
+    <p class="note">① Google スプレッドシートのアプリで書き込みたいファイルを開き、「共有」→「リンクをコピー」<br>② 下に貼り付けて「つなぐ」→ Google のアカウントを選んで「許可」</p>
+    <div class="add-line"><input id="g_url" placeholder="https://docs.google.com/spreadsheets/d/…" autocomplete="off"><button class="btn small" id="g_link">つなぐ</button></div>`;
+  }
   main.innerHTML = `
-  <div class="sec">スプレッドシート連携（Google ドライブ）</div>
-  <p class="note">スプレッドシートに Apps Script を入れて「ウェブアプリ」として公開し、その URL と合言葉を入れます。手順はこのアプリの README を見てね。</p>
+  <div class="sec">スプレッドシート連携</div>
+  ${link}
+  <details class="adv" ${mode === 'gas' ? 'open' : ''}><summary>詳細設定</summary>
   <div class="form">
-    <label>Apps Script の URL（https://script.google.com/macros/s/…/exec）</label>
-    <input id="s_url" value="${esc(s.url)}" placeholder="https://script.google.com/macros/s/xxxx/exec" autocomplete="off">
-    <label>合言葉（スクリプトの SECRET と同じもの）</label>
-    <input id="s_key" value="${esc(s.key)}" autocomplete="off">
-    <label>シート名</label>
-    <input id="s_sheet" value="${esc(s.sheet)}">
     <div class="two">
       <div><label>日付の列</label><input id="s_dateCol" value="${esc(s.dateCol)}"></div>
       <div><label>書き込む列</label><input id="s_col" value="${esc(s.col)}"></div>
       <div><label>種目の区切り</label><input id="s_sep" value="${esc(s.sep)}"></div>
     </div>
     <label class="chk"><input type="checkbox" id="s_auto" ${s.autoSync ? 'checked' : ''}>入力したら自動で書き込む（数秒後）</label>
+    <p class="note">書き込み例: ${esc(sheetText({ exercises: [{ name: 'ベンチプレス', sets: [{ w: '20', r: '10' }, { w: '40', r: '5' }] }, { name: 'スクワット', sets: [{ w: '60', r: '8' }] }] }))}</p>
+    <div class="sec" style="font-size:13px">Apps Script でつなぐ（Google ログインを使わない場合）</div>
+    <label>Apps Script の URL（https://script.google.com/macros/s/…/exec）</label>
+    <input id="s_url" value="${esc(s.url)}" placeholder="https://script.google.com/macros/s/xxxx/exec" autocomplete="off">
+    <label>合言葉（スクリプトの SECRET と同じもの）</label>
+    <input id="s_key" value="${esc(s.key)}" autocomplete="off">
+    <label>シート名</label>
+    <input id="s_sheet" value="${esc(s.sheet)}">
   </div>
-  <div class="btns"><button class="btn small" id="saveS">保存</button><button class="btn small outline" id="ping">接続テスト</button></div>
-  <p class="note">書き込み例: ${esc(sheetText({ exercises: [{ name: 'ベンチプレス', sets: [{ w: '20', r: '10' }, { w: '40', r: '5' }] }, { name: 'スクワット', sets: [{ w: '60', r: '8' }] }] }))}</p>
+  <div class="btns"><button class="btn small" id="saveS">保存</button>${mode === 'gas' ? '<button class="btn small outline" id="ping">接続テスト</button>' : ''}</div>
+  </details>
 
   <div class="sec">バックアップ</div>
   <p class="note">記録はこの端末のブラウザに保存されています。機種変更やブラウザのデータ削除に備えてファイルに書き出せます。</p>
@@ -570,6 +607,18 @@ function viewSettings(main) {
     <label class="btn small outline">ファイルから読み込む<input type="file" id="imp" accept="application/json,.json" hidden></label>
   </div>
   <p class="note" style="margin-top:24px">記録 ${Object.keys(db.days).length} 日分</p>`;
+  function headerName(c) {
+    const i = GSheets.colIndex(c) - 1;
+    return ((gs.headers || {})[s.sheet] || [])[i] || '';
+  }
+  // シートを選んだら見出しから列を決める（見つからなければ今の設定のまま）
+  const useSheet = (name) => {
+    s.sheet = name;
+    const g = GSheets.guessCols(((s.gs || {}).headers || {})[name] || []);
+    s.dateCol = g.dateCol || s.dateCol;
+    if (g.col) s.col = g.col;
+    return g;
+  };
   const read = () => {
     s.url = $('#s_url').value.trim(); s.key = $('#s_key').value;
     s.sheet = $('#s_sheet').value.trim() || DEFAULT_SETTINGS.sheet;
@@ -580,11 +629,52 @@ function viewSettings(main) {
     save();
   };
   $('#saveS').onclick = () => { read(); toast('保存しました'); render(); };
-  $('#ping').onclick = async (ev) => {
+  const ping = $('#ping');
+  if (ping) ping.onclick = async (ev) => {
     read();
     ev.target.disabled = true;
     try { const j = await callGas({ action: 'ping' }); toast(`つながりました: 「${j.title}」の「${j.sheet}」シート`, 4000); } catch (e) { toast(e.message, 4000); }
     ev.target.disabled = false;
+  };
+  const gl = $('#g_link');
+  if (gl) gl.onclick = async () => {
+    const id = GSheets.parseId($('#g_url').value);
+    if (!id) return toast('スプレッドシートのリンクを貼り付けてください');
+    const tokenP = GSheets.ensureToken(true);
+    gl.disabled = true; gl.textContent = '確認中…';
+    try {
+      const info = await GSheets.inspect(await tokenP, id);
+      s.sheetId = id;
+      s.gs = info;
+      const name = info.sheets.includes(s.sheet) ? s.sheet : info.sheets.includes('日次記録') ? '日次記録' : info.sheets[0];
+      const g = useSheet(name);
+      save();
+      toast(`「${info.title}」とつながりました` + (g.col ? '' : `\n「筋トレ」の見出しが見つからないので ${s.col}列 に書き込みます（詳細設定で変更可）`), 4000);
+      render();
+    } catch (e) {
+      toast(e.message, 4000);
+      gl.disabled = false; gl.textContent = 'つなぐ';
+    }
+  };
+  const gsel = $('#g_sheet');
+  if (gsel) gsel.onchange = () => { useSheet(gsel.value); save(); render(); };
+  const gt = $('#g_test');
+  if (gt) gt.onclick = async () => {
+    const tokenP = GSheets.ensureToken(true);
+    gt.disabled = true;
+    try {
+      s.gs = await GSheets.inspect(await tokenP, s.sheetId);
+      save();
+      toast(s.gs.sheets.includes(s.sheet) ? `OK: 「${s.gs.title}」の「${s.sheet}」シートに書き込めます` : `シート「${s.sheet}」が見つかりません`, 4000);
+      render();
+    } catch (e) { toast(e.message, 4000); gt.disabled = false; }
+  };
+  const goff = $('#g_off');
+  if (goff) goff.onclick = () => {
+    if (!confirm('スプレッドシートとつなぐのをやめますか？（記録は消えません）')) return;
+    s.sheetId = ''; s.gs = null;
+    GSheets.logout();
+    save(); render();
   };
   $('#exp').onclick = () => {
     const blob = new Blob([JSON.stringify(db, null, 1)], { type: 'application/json' });

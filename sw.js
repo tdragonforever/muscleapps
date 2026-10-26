@@ -1,6 +1,6 @@
 // オフラインでも開けるようにするための Service Worker（ネット優先、つながらなければキャッシュ）
-const CACHE = 'kintore-v2';
-const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'manifest.webmanifest', 'icon-180.png', 'icon-192.png', 'icon-512.png'];
+const CACHE = 'kintore-v3';
+const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'config.js', 'google.js', 'manifest.webmanifest', 'icon-180.png', 'icon-192.png', 'icon-512.png'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));

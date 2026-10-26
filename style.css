@@ -137,3 +137,5 @@ dialog::backdrop { background: rgba(0,0,0,.4); }
 dialog h3 { margin: 0 0 8px; color: var(--red); }
 .rmtable { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 14px; }
 .rmtable td { padding: 4px 6px; border-bottom: 1px solid var(--line); text-align: right; }
+.adv { margin-top: 16px; }
+.adv summary { font-size: 14px; color: #555; padding: 8px 0; cursor: pointer; }
