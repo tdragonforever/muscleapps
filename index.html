@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="筋トレメモ">
+<meta name="theme-color" content="#d63c38">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="icon" href="icon-192.png">
+<title>筋トレメモ</title>
+<link rel="stylesheet" href="style.css?v=2">
+</head>
+<body>
+<header id="top">
+  <button id="backBtn" class="hbtn" hidden aria-label="戻る">‹</button>
+  <h1 id="title">筋トレメモ</h1>
+  <span class="hbtn ghost"></span>
+</header>
+<main id="main"></main>
+<nav id="tabs">
+  <a href="#/" data-tab="home"><span>🏠</span>ホーム</a>
+  <a href="#/history" data-tab="history"><span>📅</span>履歴</a>
+  <a href="#/settings" data-tab="settings"><span>⚙️</span>設定</a>
+</nav>
+<div id="toast" hidden></div>
+<dialog id="dlg"></dialog>
+<script src="app.js?v=2"></script>
+</body>
+</html>
